@@ -29,6 +29,7 @@
 #include "VideoCommon/Present.h"
 
 #include "Common/WindowSystemInfo.h"
+#include "Common/Logging/Log.h"
 
 #include "Core/Boot/Boot.h"
 #include "Core/BootManager.h"
@@ -66,6 +67,8 @@ winrt::hstring m_launchOnExit;
 Common::Flag g_shutdown_requested{false};
 Common::Flag g_tried_graceful_shutdown{false};
 Common::Flag g_needs_frontend_reset{false};
+// Game Vault: set once OnActivate has run (it boots a game handed over by a link)
+Common::Flag g_activated{false};
 
 struct App : implements<App, IFrameworkViewSource, IFrameworkView>
 {
@@ -84,8 +87,16 @@ struct App : implements<App, IFrameworkViewSource, IFrameworkView>
 
   void Run()
   {
-    CoreWindow::GetForCurrentThread().Dispatcher().ProcessEvents(
-        winrt::Windows::UI::Core::CoreProcessEventsOption::ProcessAllIfPresent);
+    // Game Vault: wait for the activation before choosing between the menu and a game. A link's activation often
+    // arrives after the first pump; the menu was then already running, and booting the game from OnActivate shut
+    // down the video backend the menu still drew with (null g_vertex_manager in VertexManagerBase::Flush).
+    for (int waited = 0; !g_activated.IsSet() && waited < 5000; waited += 10)
+    {
+      CoreWindow::GetForCurrentThread().Dispatcher().ProcessEvents(
+          winrt::Windows::UI::Core::CoreProcessEventsOption::ProcessAllIfPresent);
+      if (!g_activated.IsSet())
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
 
     auto navigation = winrt::Windows::UI::Core::SystemNavigationManager::GetForCurrentView();
     navigation.BackRequested(
@@ -99,6 +110,7 @@ struct App : implements<App, IFrameworkViewSource, IFrameworkView>
       // ImGUI frontend
       if (!m_running.IsSet() || g_needs_frontend_reset.TestAndClear())
       {
+        NOTICE_LOG_FMT(CORE, "Game Vault trace: starting the menu (running {})", m_running.IsSet());
         // Ensure we're fully cleaned up before starting new frontend
         if (Core::IsRunning(Core::System::GetInstance()))
         {
@@ -166,6 +178,7 @@ struct App : implements<App, IFrameworkViewSource, IFrameworkView>
 
         if (g_shutdown_requested.TestAndClear())
         {
+          NOTICE_LOG_FMT(CORE, "Game Vault trace: shutdown requested");
           if (NetPlay::IsNetPlayRunning())
             NetPlay::SendPowerButtonEvent();
 
@@ -212,6 +225,8 @@ struct App : implements<App, IFrameworkViewSource, IFrameworkView>
       }
 
       // Make sure we've shut down properly.
+      NOTICE_LOG_FMT(CORE, "Game Vault trace: game loop ended, state {}",
+                     static_cast<int>(Core::GetState(Core::System::GetInstance())));
       m_running.Clear();
 
       // If there's another frontend, boot to that.
@@ -234,6 +249,7 @@ struct App : implements<App, IFrameworkViewSource, IFrameworkView>
 
   winrt::fire_and_forget InitializeDolphinFromFile(std::string path)
   {
+    NOTICE_LOG_FMT(CORE, "Game Vault trace: InitializeDolphinFromFile '{}'", path);
     if (path.empty())
     {
       FileOpenPicker openPicker;
@@ -309,6 +325,8 @@ struct App : implements<App, IFrameworkViewSource, IFrameworkView>
                   const winrt::Windows::ApplicationModel::Activation::IActivatedEventArgs& args)
   {
     std::stringstream filePath;
+    NOTICE_LOG_FMT(CORE, "Game Vault trace: OnActivate kind {} previous {}", static_cast<int>(args.Kind()),
+                   static_cast<int>(args.PreviousExecutionState()));
 
     if (args.Kind() == Windows::ApplicationModel::Activation::ActivationKind::Protocol)
     {
@@ -363,6 +381,7 @@ struct App : implements<App, IFrameworkViewSource, IFrameworkView>
 
     CoreWindow window = CoreWindow::GetForCurrentThread();
     window.Activate();
+    g_activated.Set();
   }
 
   void EnteredBackground(const IInspectable&,
@@ -374,6 +393,7 @@ struct App : implements<App, IFrameworkViewSource, IFrameworkView>
                   const winrt::Windows::ApplicationModel::SuspendingEventArgs& args)
   {
     auto& system = Core::System::GetInstance();
+    NOTICE_LOG_FMT(CORE, "Game Vault trace: Suspending");
 
     // The Series S/X quits fast, so let's immediately shutdown to ensure all the caches save.
     Core::Stop(system);

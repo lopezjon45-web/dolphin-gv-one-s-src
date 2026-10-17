@@ -7,14 +7,14 @@
   xmlns:uap18="http://schemas.microsoft.com/appx/manifest/uap/windows10/18" IgnorableNamespaces="uap mp rescap iot uap18">
 
 	<Identity
-    Name="3143e227-cbe5-41c4-aaa9-cf40132a1b22"
-    Publisher="CN=SternXD"
-    Version="1.1.9.1" />
-  <mp:PhoneIdentity PhoneProductId="3143e227-cbe5-41c4-aaa9-cf40132a1b22" PhonePublisherId="00000000-0000-0000-0000-000000000000"/>
+    Name="GamerDad.DolphinForGameVault"
+    Publisher="CN=GamerDad"
+    Version="1.1.9.103" />
+  <mp:PhoneIdentity PhoneProductId="5cf0a5ca-18d0-474c-88f6-a43117a219d0" PhonePublisherId="00000000-0000-0000-0000-000000000000"/>
 
 	<Properties>
-    <DisplayName>DolphinUWP</DisplayName>
-    <PublisherDisplayName>SternXD</PublisherDisplayName>
+    <DisplayName>Dolphin for Game Vault</DisplayName>
+    <PublisherDisplayName>Skitzelles (Dolphin Emulator build)</PublisherDisplayName>
     <Logo>Assets\StoreLogo.png</Logo>
   </Properties>
 
@@ -28,7 +28,7 @@
 
 	<Applications>
     <Application Id="App" Executable="$targetnametoken$.exe" EntryPoint="DolphinUWP.App" uap18:TrustLevel="mediumIL">
-      <uap:VisualElements DisplayName="DolphinUWP" Description="An emulator for the Nintendo GameCube and Wii consoles! GameCube and Wii are trademarks of Nintendo. Dolphin Emulator is not affiliated with Nintendo."
+      <uap:VisualElements DisplayName="Dolphin for Game Vault" Description="An emulator for the Nintendo GameCube and Wii consoles! GameCube and Wii are trademarks of Nintendo. Dolphin Emulator is not affiliated with Nintendo."
         Square150x150Logo="Assets\Square150x150Logo.png" Square44x44Logo="Assets\Square44x44Logo.png" BackgroundColor="transparent">
         <uap:SplashScreen Image="Assets\SplashScreen.png" />
         <uap:DefaultTile/>
@@ -71,7 +71,7 @@
           </uap:FileTypeAssociation>
         </uap:Extension>
         <uap:Extension Category="windows.protocol">
-          <uap:Protocol Name="dolphin">
+          <uap:Protocol Name="gamevault-dolphin">
             <uap:DisplayName>DolphinUWP</uap:DisplayName>
           </uap:Protocol>
         </uap:Extension>

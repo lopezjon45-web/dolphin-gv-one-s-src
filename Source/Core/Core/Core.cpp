@@ -275,6 +275,7 @@ static void ResetRumble()
 void Stop(Core::System& system)  // - Hammertime!
 {
   const State state = s_state.load();
+  NOTICE_LOG_FMT(CORE, "Game Vault trace: Core::Stop, state {}", static_cast<int>(state));
   if (state == State::Stopping || state == State::Uninitialized)
     return;
 
@@ -557,19 +558,26 @@ static void EmuThread(Core::System& system, std::unique_ptr<BootParameters> boot
 
   VideoBackendBase::PopulateBackendInfo(wsi);
 
-  if (!g_video_backend->Initialized()) 
+  // Game Vault: the guard must live as long as the emulation. Declared inside the block below it ended there and shut
+  // the video backend down right after starting it, so a game started straight from a link (no menu before it)
+  // crashed at its first draw (g_vertex_manager null in VertexManagerBase::Flush).
+  bool video_started_here = false;
+  Common::ScopeGuard video_guard{[&video_started_here] {
+    if (!video_started_here)
+      return;
+    // Clear on screen messages that haven't expired
+    OSD::ClearMessages();
+
+    g_video_backend->Shutdown();
+  }};
+  if (!g_video_backend->Initialized())
   {
       if (!g_video_backend->Initialize(wsi))
       {
         PanicAlertFmt("Failed to initialize video backend!");
         return;
       }
-      Common::ScopeGuard video_guard{[] {
-        // Clear on screen messages that haven't expired
-        OSD::ClearMessages();
-
-        g_video_backend->Shutdown();
-      }};
+      video_started_here = true;
   }
   else 
   {
@@ -919,6 +927,7 @@ void UpdateTitle(Core::System& system)
 
 void Shutdown(Core::System& system)
 {
+  NOTICE_LOG_FMT(CORE, "Game Vault trace: Core::Shutdown, state {}", static_cast<int>(s_state.load()));
   // During shutdown DXGI expects us to handle some messages on the UI thread.
   // Therefore we can't immediately block and wait for the emu thread to shut
   // down, so we join the emu thread as late as possible when the UI has already

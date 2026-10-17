@@ -106,6 +106,5 @@
 	path = Externals/miniupnpc/miniupnp
 	url = https://github.com/miniupnp/miniupnp.git
 	shallow = true
-[submodule "Externals/lunasvg"]
-	path = Externals/lunasvg
-	url = https://github.com/SternXD/lunasvg.git
+[submodule "Externals/SDL/SDL"]
+	url = https://github.com/XboxEmulationHub/SDL3-uwp.git
