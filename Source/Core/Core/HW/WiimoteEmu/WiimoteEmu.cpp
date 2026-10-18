@@ -685,6 +685,10 @@ ButtonData Wiimote::GetCurrentlyPressedButtons()
 void Wiimote::LoadDefaults(const ControllerInterface& ciface)
 {
   EmulatedController::LoadDefaults(ciface);
+#if WINRT_XBOX
+  // Game Vault: as GCPad::LoadDefaults - the gamepad appears after start-up, so name the default device outright
+  SetDefaultDevice("WGInput/" + std::to_string(m_index) + "/Xbox One Game Controller");
+#endif
 
 
 #ifdef ANDROID

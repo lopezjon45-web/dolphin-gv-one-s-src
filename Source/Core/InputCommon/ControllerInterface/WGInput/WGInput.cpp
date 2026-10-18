@@ -660,6 +660,17 @@ static void AddDevice(const WGI::RawGameController& raw_game_controller)
   try
   {
     WGI::Gamepad gamepad = WGI::Gamepad::FromGameController(raw_game_controller);
+#if WINRT_XBOX
+    // Game Vault: the Xbox default mappings (GCPadEmu, WiimoteEmu, Nunchuk, HotkeyManager) name the device
+    // "Xbox One Game Controller", but the console reports each pad by its own name (a Series X|S, Elite or
+    // third-party pad is called something else), so no button worked. Every standard gamepad gets that name.
+    if (gamepad)
+    {
+      NOTICE_LOG_FMT(CONTROLLERINTERFACE, "Game Vault trace: gamepad '{}' used as Xbox One Game Controller",
+                     device_name);
+      device_name = "Xbox One Game Controller";
+    }
+#endif
     // Note that gamepad may be nullptr here. The Device class will deal with this.
     auto dev = std::make_shared<Device>(std::move(device_name), raw_game_controller, gamepad);
 

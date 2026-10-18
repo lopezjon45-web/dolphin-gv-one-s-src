@@ -177,6 +177,11 @@ void GCPad::SetOutput(const ControlState strength)
 void GCPad::LoadDefaults(const ControllerInterface& ciface)
 {
   EmulatedController::LoadDefaults(ciface);
+#if WINRT_XBOX
+  // Game Vault: the console's gamepad appears a moment after start-up, so the default device was still empty
+  // here; GetInput then reported the pad as unplugged and the game saw no button at all. Name it outright.
+  SetDefaultDevice("WGInput/" + std::to_string(m_index) + "/Xbox One Game Controller");
+#endif
 
 #ifdef ANDROID
   // Rumble
