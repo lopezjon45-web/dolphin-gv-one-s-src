@@ -8,6 +8,9 @@
 #include <string>
 
 #ifdef _WIN32
+#include <Windows.h>
+#include <cstring>
+#include <fcntl.h>
 #include <io.h>
 
 #include "Common/CommonFuncs.h"
@@ -27,6 +30,20 @@
 
 namespace File
 {
+#ifdef _WIN32
+static SharedFileOpener s_shared_file_opener = nullptr;
+
+void SetSharedFileOpener(SharedFileOpener opener)
+{
+  s_shared_file_opener = opener;
+}
+
+void* OpenSharedFile(const std::string& path)
+{
+  return s_shared_file_opener ? s_shared_file_opener(path) : nullptr;
+}
+#endif
+
 IOFile::IOFile() : m_file(nullptr), m_good(true)
 {
 }
@@ -77,6 +94,19 @@ bool IOFile::Open(const std::string& filename, const char openmode[],
   {
     m_file = _tfsopen(UTF8ToTStr(filename).c_str(), UTF8ToTStr(openmode).c_str(), SH_DENYWR);
     m_good = m_file != nullptr;
+  }
+  // Game Vault: the game file shared through the link, for reading only
+  if (!m_good && openmode[0] == 'r' && !std::strchr(openmode, '+'))
+  {
+    if (void* handle = OpenSharedFile(filename))
+    {
+      const int fd = _open_osfhandle(reinterpret_cast<intptr_t>(handle), _O_RDONLY | _O_BINARY);
+      if (fd == -1)
+        CloseHandle(handle);
+      else if (!(m_file = _fdopen(fd, "rb")))
+        _close(fd);
+      m_good = m_file != nullptr;
+    }
   }
 #else
 #ifdef ANDROID

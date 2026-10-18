@@ -114,6 +114,23 @@ FileInfo::FileInfo(const char* path)
     if (error)
       m_size = 0;
     m_exists = fs::exists(m_status);
+#ifdef _WIN32
+    // Game Vault: the game file shared through the link (a drive this app may not look into itself)
+    if (!m_exists)
+    {
+      if (void* handle = OpenSharedFile(path))
+      {
+        LARGE_INTEGER size{};
+        if (GetFileSizeEx(static_cast<HANDLE>(handle), &size))
+        {
+          m_status.type(fs::file_type::regular);
+          m_size = static_cast<u64>(size.QuadPart);
+          m_exists = true;
+        }
+        CloseHandle(static_cast<HANDLE>(handle));
+      }
+    }
+#endif
   }
 }
 

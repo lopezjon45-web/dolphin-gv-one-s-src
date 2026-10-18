@@ -1,3 +1,4 @@
+#include <unknwn.h>  // first, before any winrt header: classic COM interfaces then work with as<>()
 #include "Host.h"
 
 #include "UWPUtils.h"
@@ -5,7 +6,11 @@
 #include <windows.h>
 #include <iostream>
 
+#include <cctype>
+#include <mutex>
+#include <thread>
 #include <winrt/Windows.ApplicationModel.Activation.h>
+#include <winrt/Windows.ApplicationModel.DataTransfer.h>
 #include <winrt/Windows.ApplicationModel.Core.h>
 #include <winrt/Windows.Foundation.Collections.h>
 #include <winrt/Windows.Foundation.h>
@@ -28,6 +33,8 @@
 #include "VideoCommon/OnScreenDisplay.h"
 #include "VideoCommon/Present.h"
 
+#include "Common/FileUtil.h"
+#include "Common/IOFile.h"
 #include "Common/WindowSystemInfo.h"
 #include "Common/Logging/Log.h"
 
@@ -69,6 +76,61 @@ Common::Flag g_tried_graceful_shutdown{false};
 Common::Flag g_needs_frontend_reset{false};
 // Game Vault: set once OnActivate has run (it boots a game handed over by a link)
 Common::Flag g_activated{false};
+
+// Game Vault: the game file shared through the link's disctoken= (Common/IOFile.h). A drive this app may not open
+// itself (seen with a player's USB drive: Wii games went straight back to the Home screen) is read through it.
+// IStorageItemHandleAccess as in the SDK's WindowsStorageCOM.h, which pulls in desktop-only shell headers.
+enum { GV_HAO_READ = 0x120089, GV_HSO_SHARE_READ = 0x1, GV_HO_NONE = 0 };
+struct __declspec(uuid("5CA296B2-2C25-4D22-B785-B885C8201E6A")) __declspec(novtable)
+GV_IStorageItemHandleAccess : public ::IUnknown
+{
+  virtual HRESULT STDMETHODCALLTYPE Create(DWORD accessOptions, DWORD sharingOptions, DWORD options,
+                                           ::IUnknown* oplockBreakingHandler, HANDLE* interopHandle) = 0;
+};
+winrt::hstring g_share_token;
+std::string g_share_path;
+std::mutex g_share_lock;
+winrt::Windows::Storage::StorageFile g_share_file{nullptr};  // redeemed once, a handle made per open
+
+static std::string ShareKey(std::string path)
+{
+  for (char& c : path)
+    c = c == '/' ? '\\' : static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  return path;
+}
+
+static void* OpenGameVaultShare(const std::string& path)
+{
+  if (g_share_token.empty() || ShareKey(path) != g_share_path)
+    return nullptr;
+  std::lock_guard<std::mutex> lock(g_share_lock);
+  HANDLE result = nullptr;
+  const bool first = !g_share_file;
+  // blocking on WinRT calls is not allowed on the app's UI thread: a thread of its own
+  std::thread([&] {
+    winrt::init_apartment(winrt::apartment_type::multi_threaded);
+    try
+    {
+      if (!g_share_file)
+      {
+        g_share_file = Windows::ApplicationModel::DataTransfer::SharedStorageAccessManager::
+                           RedeemTokenForFileAsync(g_share_token)
+                               .get();
+      }
+      HANDLE h = nullptr;
+      if (SUCCEEDED(g_share_file.as<GV_IStorageItemHandleAccess>()->Create(GV_HAO_READ, GV_HSO_SHARE_READ,
+                                                                           GV_HO_NONE, nullptr, &h)))
+        result = h;
+    }
+    catch (...)
+    {
+    }
+    winrt::uninit_apartment();
+  }).join();
+  if (first || !result)
+    NOTICE_LOG_FMT(CORE, "Game Vault trace: shared game file {}", result ? "opened" : "not opened");
+  return result;
+}
 
 struct App : implements<App, IFrameworkViewSource, IFrameworkView>
 {
@@ -363,6 +425,10 @@ struct App : implements<App, IFrameworkViewSource, IFrameworkView>
           // For if we want to return to a frontend
           m_launchOnExit = arg.Value();
         }
+        else if (arg.Name() == winrt::hstring(L"disctoken"))
+        {
+          g_share_token = arg.Value();
+        }
       }
     }
 
@@ -374,6 +440,18 @@ struct App : implements<App, IFrameworkViewSource, IFrameworkView>
     UICommon::InitControllers({});
 
     std::string gamePath = filePath.str();
+    if (!g_share_token.empty() && !gamePath.empty())
+    {
+      // test switch LocalState\share-test.txt: boot a path that cannot be opened, so the game is read the way a
+      // refused drive's is (only through the shared file)
+      if (File::Exists(File::GetUserPath(D_USER_IDX) + "share-test.txt"))
+      {
+        gamePath = "Z:\\gv-share-test\\" + gamePath.substr(gamePath.find_last_of("\\/") + 1);
+        NOTICE_LOG_FMT(CORE, "Game Vault trace: share test, booting {}", gamePath);
+      }
+      g_share_path = ShareKey(gamePath);
+      File::SetSharedFileOpener(OpenGameVaultShare);
+    }
     if (!gamePath.empty() && gamePath != "")
     {
       InitializeDolphinFromFile(gamePath);

@@ -26,6 +26,15 @@ enum class SharedAccess
   Read,
 };
 
+#ifdef _WIN32
+// Game Vault: a game on a drive this app may not open itself (the console remembers a refused consent per app).
+// Game Vault, which can, shares the file and passes a token in the link (disctoken=); the frontend sets an opener
+// that turns it into a read-only Win32 handle for that one path. Used only when opening the normal way fails.
+using SharedFileOpener = void* (*)(const std::string& path);
+void SetSharedFileOpener(SharedFileOpener opener);
+void* OpenSharedFile(const std::string& path);  // a HANDLE, or nullptr
+#endif
+
 // simple wrapper for cstdlib file functions to
 // hopefully will make error checking easier
 // and make forgetting an fclose() harder
