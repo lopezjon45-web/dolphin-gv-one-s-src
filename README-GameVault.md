@@ -12,6 +12,9 @@ Changes on top of XboxEmulationHub/dolphin master (branch `gamevault`):
 - **The video backend stays up for a game started without the menu.** `Source/Core/Core/Core.cpp` (`EmuThread`): the
   guard that shuts video down at the end of emulation was declared inside an `if` block, so it ran right after video
   started; the first draw then crashed (null `g_vertex_manager` in `VertexManagerBase::Flush`).
+- **Games on drives Dolphin may not open itself.** On some USB drives the console refuses Dolphin the game file;
+  Game Vault shares it and passes a token in the link (`disctoken=`). When the normal open fails, Dolphin reads the
+  game through that shared file, read-only (`Common/IOFile.cpp`, `Common/FileUtil.cpp`, `DolphinWinRT/main.cpp`).
 - Own package identity (`GamerDad.DolphinForGameVault`) and link `gamevault-dolphin:`, so it sits next to the
   original Dolphin; trace lines ("Game Vault trace") in the Core log.
 - Build fixes: the SDL submodule points at XboxEmulationHub/SDL3-uwp (where its commit lives); lunasvg (its commit is
