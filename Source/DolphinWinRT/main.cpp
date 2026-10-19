@@ -602,6 +602,15 @@ struct App : implements<App, IFrameworkViewSource, IFrameworkView>
         BootParameters::GenerateFromFile(path, BootSessionData("", DeleteSavestateAfterBoot::No));
 
     GvLog(fmt::format("boot: {} ({}x{})", path, wsi.render_width, wsi.render_height));
+    if (!boot)
+    {
+      // the game file could not be opened (gone, or no access): Dolphin itself is fine, so this is not a failed
+      // start - two of them set a player's settings aside for nothing (a missing Wind Waker .ciso)
+      GvLog("boot: the game file could not be opened - not counted as a failed start");
+      GvStartGood();
+      Core::Shutdown(system);
+      co_return;
+    }
     if (!BootManager::BootCore(system, std::move(boot), wsi))
     {
       GvLog("boot: failed (Dolphin's reason is in the lines above)");
