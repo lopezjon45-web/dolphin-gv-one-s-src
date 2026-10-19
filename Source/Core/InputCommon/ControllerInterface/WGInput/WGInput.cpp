@@ -30,6 +30,7 @@
 #include "Common/StringUtil.h"
 #include "Common/WorkQueueThread.h"
 #include "InputCommon/ControllerInterface/ControllerInterface.h"
+#include "InputCommon/ControllerInterface/WGInput/GameVaultWheel.h"
 
 namespace WGI = winrt::Windows::Gaming::Input;
 namespace Haptics = winrt::Windows::Devices::Haptics;
@@ -670,6 +671,15 @@ static void AddDevice(const WGI::RawGameController& raw_game_controller)
                      device_name);
       device_name = "Xbox One Game Controller";
     }
+    // Game Vault: a racing wheel is no gamepad; it gets a gamepad's names (GameVaultWheel.cpp)
+    if (!gamepad)
+    {
+      if (auto wheel = GameVaultWheel::TryCreate(raw_game_controller, device_name))
+      {
+        g_controller_interface.AddDevice(std::move(wheel));
+        return;
+      }
+    }
 #endif
     // Note that gamepad may be nullptr here. The Device class will deal with this.
     auto dev = std::make_shared<Device>(std::move(device_name), raw_game_controller, gamepad);
@@ -689,6 +699,8 @@ static void RemoveDevice(const WGI::RawGameController& raw_game_controller)
   g_controller_interface.RemoveDevice([&](const auto* dev) {
     if (dev->GetSource() != SOURCE_NAME)
       return false;
+    if (const auto wheel = GameVaultWheel::Matches(dev, raw_game_controller))
+      return *wheel;
     return static_cast<const Device*>(dev)->GetRawGameController() == raw_game_controller;
   });
 }
