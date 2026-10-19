@@ -304,8 +304,11 @@ void GCPad::LoadDefaults(const ControllerInterface& ciface)
                                           "/Xbox One Game Controller:Trigger R`");  // Analog-R
 
   // Rumble
+  // Game Vault: an Xbox pad drives its motors through Gamepad.Vibration ("Motor L"/"Motor R"); "Rumble 0" exists
+  // only on pads with a haptics controller, so the default never rumbled. "A | B" drives both.
   m_rumble->SetControlExpression(0, "`WGInput/" + std::to_string(m_index) +
-                                        "/Xbox One Game Controller:Rumble 0`");
+                                        "/Xbox One Game Controller:Motor L` | `WGInput/" +
+                                        std::to_string(m_index) + "/Xbox One Game Controller:Motor R`");
 #else
   m_triggers->SetControlExpression(0, "`Q`");        // L
   m_triggers->SetControlExpression(1, "`W`");        // R

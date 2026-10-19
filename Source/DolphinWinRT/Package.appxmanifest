@@ -9,7 +9,7 @@
 	<Identity
     Name="GamerDad.DolphinForGameVault"
     Publisher="CN=GamerDad"
-    Version="1.1.9.107" />
+    Version="1.1.9.109" />
   <mp:PhoneIdentity PhoneProductId="5cf0a5ca-18d0-474c-88f6-a43117a219d0" PhonePublisherId="00000000-0000-0000-0000-000000000000"/>
 
 	<Properties>
@@ -89,5 +89,14 @@
     <Capability Name="internetClientServer"/>
 		<Capability Name="privateNetworkClientServer"/>
   </Capabilities>
-	
+
+	<Extensions>
+		<!-- Game Vault: the folder all of this publisher's apps share; Dolphin's start log goes into its logs folder -->
+		<Extension Category="windows.publisherCacheFolders">
+			<PublisherCacheFolders>
+				<Folder Name="games" />
+			</PublisherCacheFolders>
+		</Extension>
+	</Extensions>
+
 </Package>

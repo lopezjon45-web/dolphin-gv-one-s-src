@@ -7,8 +7,13 @@
 #include <iostream>
 
 #include <cctype>
+#include <cstdio>
+#include <cstring>
+#include <exception>
+#include <share.h>
 #include <mutex>
 #include <thread>
+#include <winrt/Windows.ApplicationModel.h>
 #include <winrt/Windows.ApplicationModel.Activation.h>
 #include <winrt/Windows.ApplicationModel.DataTransfer.h>
 #include <winrt/Windows.ApplicationModel.Core.h>
@@ -36,7 +41,9 @@
 #include "Common/FileUtil.h"
 #include "Common/IOFile.h"
 #include "Common/WindowSystemInfo.h"
+#include "Common/Flag.h"
 #include "Common/Logging/Log.h"
+#include "Common/Logging/LogManager.h"
 
 #include "Core/Boot/Boot.h"
 #include "Core/BootManager.h"
@@ -132,6 +139,229 @@ static void* OpenGameVaultShare(const std::string& path)
   return result;
 }
 
+// Game Vault: Dolphin's own log of each start, in the folder this publisher's apps share (games\logs), which Game
+// Vault sends with its problem reports. Dolphin's main log is off by default and stays in LocalState, so a start
+// that failed said nothing at all (Krauser985, 2026-10-18: Dolphin closed within seconds, from Game Vault and from
+// the Home screen alike). Written as it goes, so the last line shows how far a start got.
+static std::mutex g_gvlog_lock;
+static FILE* g_gvlog = nullptr;
+static long g_gvlog_size = 0;
+constexpr long GVLOG_MAX = 2 << 20;
+
+static void GvLogRaw(const char* text)
+{
+  std::unique_lock<std::mutex> lock(g_gvlog_lock, std::try_to_lock);  // never waits: also used while crashing
+  if (!lock.owns_lock() || !g_gvlog || g_gvlog_size > GVLOG_MAX)
+    return;
+  g_gvlog_size += static_cast<long>(std::fputs(text, g_gvlog) >= 0 ? std::strlen(text) : 0);
+  if (g_gvlog_size > GVLOG_MAX)
+    std::fputs("[log full, the rest left out]\n", g_gvlog);
+  std::fflush(g_gvlog);
+}
+
+static void GvLog(const std::string& line)
+{
+  SYSTEMTIME t;
+  GetLocalTime(&t);
+  char stamp[32];
+  std::snprintf(stamp, sizeof(stamp), "%02d:%02d:%02d.%03d ", t.wHour, t.wMinute, t.wSecond, t.wMilliseconds);
+  GvLogRaw((stamp + line + "\n").c_str());
+}
+
+static std::wstring GvSharedFolder()
+{
+  try
+  {
+    return std::wstring(ApplicationData::Current().GetPublisherCacheFolder(L"games").Path());
+  }
+  catch (...)
+  {
+    return L"";
+  }
+}
+
+// a crash: what and where, as an offset into its module, so it can be looked up in the build's symbols
+static LONG WINAPI GvCrashFilter(EXCEPTION_POINTERS* info)
+{
+  const auto* rec = info->ExceptionRecord;
+  char module[MAX_PATH] = "?";
+  HMODULE base = nullptr;
+  if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                         static_cast<LPCSTR>(rec->ExceptionAddress), &base))
+  {
+    GetModuleFileNameA(base, module, MAX_PATH);
+  }
+  const char* name = std::strrchr(module, '\\');
+  char text[512];
+  std::snprintf(text, sizeof(text),
+                "===== CRASH REPORT (Dolphin) =====\nexception 0x%08lX at %s+0x%llX (info %llX %llX)\n",
+                rec->ExceptionCode, name ? name + 1 : module,
+                static_cast<unsigned long long>(static_cast<const char*>(rec->ExceptionAddress) -
+                                                reinterpret_cast<const char*>(base)),
+                rec->NumberParameters > 0 ? static_cast<unsigned long long>(rec->ExceptionInformation[0]) : 0ull,
+                rec->NumberParameters > 1 ? static_cast<unsigned long long>(rec->ExceptionInformation[1]) : 0ull);
+  GvLogRaw(text);
+  return EXCEPTION_CONTINUE_SEARCH;
+}
+
+static void GvOpenLog()
+{
+  if (g_gvlog)
+    return;
+  const std::wstring shared = GvSharedFolder();
+  if (shared.empty())
+    return;
+  const std::wstring logs = shared + L"\\logs";
+  CreateDirectoryW(logs.c_str(), nullptr);
+  g_gvlog = _wfsopen((logs + L"\\Dolphin (GameCube, Wii).log").c_str(), L"w", _SH_DENYWR);
+  SetUnhandledExceptionFilter(GvCrashFilter);
+  std::set_terminate([] {
+    GvLog("stopped: an error nobody caught (std::terminate)");
+    std::abort();
+  });
+  const auto v = winrt::Windows::ApplicationModel::Package::Current().Id().Version();
+  GvLog(fmt::format("Dolphin for Game Vault {}.{}.{}.{} starting", v.Major, v.Minor, v.Build, v.Revision));
+}
+
+// Dolphin's own notices and errors (panic alerts are logged as errors) go into the start log too. The log manager
+// is made anew with every UICommon::Init, so this runs after each.
+class GvLogListener : public Common::Log::LogListener
+{
+public:
+  void Log(Common::Log::LogLevel, const char* msg) override { GvLogRaw(msg); }
+};
+
+static void GvHookLog()
+{
+  auto* manager = Common::Log::LogManager::GetInstance();
+  if (!manager || !g_gvlog)
+    return;
+  manager->RegisterListener(Common::Log::LogListener::LOG_WINDOW_LISTENER, std::make_unique<GvLogListener>());
+  manager->EnableListener(Common::Log::LogListener::LOG_WINDOW_LISTENER, true);
+  if (manager->GetLogLevel() < Common::Log::LogLevel::LERROR)
+    manager->SetLogLevel(Common::Log::LogLevel::LERROR);
+  for (int i = 0; i < static_cast<int>(Common::Log::LogType::NUMBER_OF_LOGS); i++)
+  {
+    const auto type = static_cast<Common::Log::LogType>(i);
+    // a game's own reports can be many lines a second
+    if (type != Common::Log::LogType::OSREPORT && type != Common::Log::LogType::OSREPORT_HLE)
+      manager->SetEnable(type, true);
+  }
+}
+
+// Rumble: up to 1.1.9.108 the default controller settings sent rumble to "Rumble 0", an output Xbox pads do not
+// have (they rumble through "Motor L"/"Motor R"), so GameCube and Wii games never shook the pad. Settings saved
+// with that old default get both motors instead; a rumble line the player changed themselves is left alone.
+static void GvRumbleFix()
+{
+  const std::string config = File::GetUserPath(D_CONFIG_IDX);
+  for (const char* name : {"GCPadNew.ini", "WiimoteNew.ini"})
+  {
+    std::string text;
+    if (!File::ReadFileToString(config + name, text))
+      continue;
+    int changed = 0;
+    for (size_t at = 0; (at = text.find("/Xbox One Game Controller:Rumble 0`", at)) != std::string::npos;)
+    {
+      const size_t open = text.rfind('`', at);
+      const size_t close = at + std::strlen("/Xbox One Game Controller:Rumble 0`");
+      if (open == std::string::npos)
+        break;
+      const std::string device = text.substr(open + 1, at - open - 1);  // "WGInput/0"
+      const std::string both = "`" + device + "/Xbox One Game Controller:Motor L` | `" + device +
+                               "/Xbox One Game Controller:Motor R`";
+      text.replace(open, close - open, both);
+      at = open + both.size();
+      changed++;
+    }
+    if (changed && File::WriteStringToFile(config + name, text))
+      GvLog(fmt::format("rumble: {} line(s) in {} now use both motors", changed, name));
+  }
+}
+
+// Safe start: LocalState\gv-start.txt holds "<starts in a row that failed> <times the settings were set aside>".
+// A start counts as good once Dolphin has run 20 s or closed normally. After two failed starts in a row the
+// settings (the Config folder, possibly copied over from the original Dolphin by the setup) are set aside once,
+// and the game list cache is dropped, so Dolphin starts with its defaults. Saves, memory cards and the Wii data
+// stay where they are.
+static std::string GvStartFile()
+{
+  return UWP::GetLocalFolder() + "\\gv-start.txt";
+}
+
+static void GvStartGood()
+{
+  static Common::Flag done{false};
+  if (done.TestAndSet())
+  {
+    int fails = 0, asides = 0;
+    if (FILE* f = std::fopen(GvStartFile().c_str(), "r"))
+    {
+      std::fscanf(f, "%d %d", &fails, &asides);
+      std::fclose(f);
+    }
+    if (FILE* f = std::fopen(GvStartFile().c_str(), "w"))
+    {
+      std::fprintf(f, "0 %d\n", asides);
+      std::fclose(f);
+    }
+    GvLog("start: good");
+  }
+}
+
+static void GvSafeStart(const std::string& user)
+{
+  int fails = 0, asides = 0;
+  if (FILE* f = std::fopen(GvStartFile().c_str(), "r"))
+  {
+    std::fscanf(f, "%d %d", &fails, &asides);
+    std::fclose(f);
+  }
+  GvLog(fmt::format("start: {} failed start(s) before this one, settings set aside {} time(s) so far", fails,
+                    asides));
+  if (fails >= 2 && asides == 0)
+  {
+    SYSTEMTIME t;
+    GetLocalTime(&t);
+    const std::string config = user + "/Config";
+    const std::string aside = fmt::format("{}/Config set aside {:04}-{:02}-{:02} {:02}{:02}{:02}", user, t.wYear,
+                                          t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond);
+    const bool moved = File::IsDirectory(config) && File::Rename(config, aside);
+    File::Delete(user + "/Cache/gamelist.cache", File::IfAbsentBehavior::NoConsoleWarning);
+    GvLog(moved ? "start: settings set aside to \"" + aside + "\", starting with the defaults" :
+                  "start: no settings to set aside (" + config + ")");
+    asides++;
+    fails = 0;
+  }
+  if (FILE* f = std::fopen(GvStartFile().c_str(), "w"))
+  {
+    std::fprintf(f, "%d %d\n", fails + 1, asides);
+    std::fclose(f);
+  }
+  std::thread([] {
+    std::this_thread::sleep_for(std::chrono::seconds(20));
+    GvStartGood();
+  }).detach();
+}
+
+// The user folder chosen in Dolphin's settings (LocalState\user.txt) may be on a drive that is gone or that this
+// app may not write to; Dolphin then cannot keep its settings and closes. This start then uses LocalState.
+static std::string GvUserLocation()
+{
+  std::string user = UWP::GetUserLocation();
+  while (!user.empty() && (user.back() == '\r' || user.back() == '\n' || user.back() == ' '))
+    user.pop_back();
+  const std::string local = UWP::GetLocalFolder();
+  if (user != local)
+  {
+    const bool ok = !user.empty() && File::IsDirectory(user) && UWP::TestPathPermissions(user);
+    GvLog("user folder from Dolphin's settings: " + user + (ok ? "" : " - cannot be written to, using LocalState"));
+    if (!ok)
+      return local;
+  }
+  return user;
+}
+
 struct App : implements<App, IFrameworkViewSource, IFrameworkView>
 {
   IFrameworkView CreateView() { return *this; }
@@ -187,12 +417,16 @@ struct App : implements<App, IFrameworkViewSource, IFrameworkView>
         // Reinitialize UI systems
         UICommon::Shutdown();
         UICommon::Init();
+        GvHookLog();
         UICommon::InitControllers({});
 
         // Create and run new frontend
+        GvLog("step: menu starting");
         auto frontend = new ImGuiFrontend::ImGuiFrontend();
         auto result = frontend->RunUntilSelection();
         auto game = result.game_result;
+        GvLog(game ? "menu: game chosen" : result.netplay ? "menu: netplay" :
+              result.boot_params ? "menu: system menu" : "menu: closed without a choice");
 
         if (game)
         {
@@ -367,19 +601,24 @@ struct App : implements<App, IFrameworkViewSource, IFrameworkView>
     std::unique_ptr<BootParameters> boot =
         BootParameters::GenerateFromFile(path, BootSessionData("", DeleteSavestateAfterBoot::No));
 
+    GvLog(fmt::format("boot: {} ({}x{})", path, wsi.render_width, wsi.render_height));
     if (!BootManager::BootCore(system, std::move(boot), wsi))
     {
+      GvLog("boot: failed (Dolphin's reason is in the lines above)");
       fprintf(stderr, "Could not boot the specified file\n");
       Core::Shutdown(system);
       co_return;
     }
 
+    GvLog("boot: started");
     m_running.Set();
     co_return;
   }
 
   void OnClosed(const IInspectable&, const winrt::Windows::UI::Core::CoreWindowEventArgs& args)
   {
+    GvLog("closed");
+    GvStartGood();
     g_shutdown_requested.Set();
   }
 
@@ -387,6 +626,9 @@ struct App : implements<App, IFrameworkViewSource, IFrameworkView>
                   const winrt::Windows::ApplicationModel::Activation::IActivatedEventArgs& args)
   {
     std::stringstream filePath;
+    GvOpenLog();
+    GvLog(fmt::format("activated: kind {}, previous state {}", static_cast<int>(args.Kind()),
+                      static_cast<int>(args.PreviousExecutionState())));
     NOTICE_LOG_FMT(CORE, "Game Vault trace: OnActivate kind {} previous {}", static_cast<int>(args.Kind()),
                    static_cast<int>(args.PreviousExecutionState()));
 
@@ -432,12 +674,37 @@ struct App : implements<App, IFrameworkViewSource, IFrameworkView>
       }
     }
 
+    // Game Vault: App type "App" (Dev Home) gives only 1 GB, and games run out of memory and close. Started by
+    // Game Vault with that little: straight back to it with "from=lowmem-dolphin", which says on the TV
+    // what to change.
+    if (std::wstring_view(m_launchOnExit).rfind(L"gamevault:", 0) == 0 &&
+        winrt::Windows::System::MemoryManager::AppMemoryUsageLimit() < (2048ull << 20))
+    {
+      GvLog("app type: only " + std::to_string(winrt::Windows::System::MemoryManager::AppMemoryUsageLimit() >> 20) +
+            " MB (App), back to Game Vault");
+      winrt::Windows::System::Launcher::LaunchUriAsync(
+          winrt::Windows::Foundation::Uri(L"gamevault:?from=lowmem-dolphin"))
+          .Completed([](auto const&, auto) { winrt::Windows::ApplicationModel::Core::CoreApplication::Exit(); });
+      return;
+    }
+
     Core::DeclareAsHostThread();
 
-    UICommon::SetUserDirectory(UWP::GetUserLocation());
+    GvLog(fmt::format("link: game \"{}\", shared file {}, back to {}", filePath.str(),
+                      g_share_token.empty() ? "no" : "yes", m_launchOnExit.empty() ? "nothing" : "a link"));
+    const std::string user = GvUserLocation();
+    static Common::Flag safe_start_done{false};
+    if (safe_start_done.TestAndSet())
+      GvSafeStart(user);
+    UICommon::SetUserDirectory(user);
+    GvLog("step: user folder " + File::GetUserPath(D_USER_IDX));
     UICommon::CreateDirectories();
+    GvRumbleFix();
     UICommon::Init();
+    GvHookLog();
+    GvLog("step: settings loaded");
     UICommon::InitControllers({});
+    GvLog("step: controllers ready");
 
     std::string gamePath = filePath.str();
     if (!g_share_token.empty() && !gamePath.empty())
@@ -472,6 +739,8 @@ struct App : implements<App, IFrameworkViewSource, IFrameworkView>
   {
     auto& system = Core::System::GetInstance();
     NOTICE_LOG_FMT(CORE, "Game Vault trace: Suspending");
+    GvLog("suspending (closed by the console or the player)");
+    GvStartGood();
 
     // The Series S/X quits fast, so let's immediately shutdown to ensure all the caches save.
     Core::Stop(system);

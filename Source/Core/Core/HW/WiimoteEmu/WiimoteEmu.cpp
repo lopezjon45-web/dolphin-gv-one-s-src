@@ -833,8 +833,11 @@ void Wiimote::LoadDefaults(const ControllerInterface& ciface)
 #endif
 
 #if WINRT_XBOX
+  // Game Vault: an Xbox pad drives its motors through Gamepad.Vibration ("Motor L"/"Motor R"); "Rumble 0" exists
+  // only on pads with a haptics controller, so the default never rumbled. "A | B" drives both.
   m_rumble->SetControlExpression(0, "`WGInput/" + std::to_string(m_index) +
-                                        "/Xbox One Game Controller:Rumble 0`");
+                                        "/Xbox One Game Controller:Motor L` | `WGInput/" +
+                                        std::to_string(m_index) + "/Xbox One Game Controller:Motor R`");
 #endif
 
   // Enable Nunchuk:
