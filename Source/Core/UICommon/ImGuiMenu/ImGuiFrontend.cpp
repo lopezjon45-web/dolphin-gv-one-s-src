@@ -78,6 +78,7 @@
 #include "Core/Config/NetplaySettings.h"
 #include "Core/Config/SYSCONFSettings.h"
 #include "Core/Config/UISettings.h"
+#include "Common/GvTestKeys.h"
 #include "Core/Config/WiimoteSettings.h"
 #include "Core/ConfigLoaders/GameConfigLoader.h"
 #include "Core/ConfigManager.h"
@@ -1057,16 +1058,27 @@ void ImGuiFrontend::PopulateControls()
 
 void ImGuiFrontend::RefreshControls(bool updateGameSelection)
 {
-  if (m_controllers.empty())
+  // Game Vault: with no controller connected the device list was rebuilt on every frame, which takes seconds on
+  // the console: the menu hardly moved until a controller woke up. Look again every 2 s instead.
+  static auto s_last_populate = std::chrono::steady_clock::time_point{};
+  if (m_controllers.empty() && std::chrono::steady_clock::now() - s_last_populate > std::chrono::seconds(2))
+  {
+    s_last_populate = std::chrono::steady_clock::now();
     PopulateControls();
+  }
 
   bool input_handled = false;
-  for (auto device : m_controllers)
+  // Game Vault test hook (Common/GvTestKeys.h): a script also works with no controller connected
+  auto devices = m_controllers;
+  if (GvTest::Active())
+    devices.push_back(nullptr);
+  for (auto device : devices)
   {
-    if (input_handled || device == nullptr || !device->IsValid())
+    if (input_handled || ((device == nullptr || !device->IsValid()) && !(device == nullptr && GvTest::Active())))
       return;
 
-    device->UpdateInput();
+    if (device)
+      device->UpdateInput();
 
     // wrap around if exceeding the max games or going below
     if (updateGameSelection)
@@ -1239,9 +1251,12 @@ FrontendResult ImGuiFrontend::RunMainLoop()
     if (!m_state.controlsDisabled)
       RefreshControls(!m_state.showSettingsWindow && !m_state.showPropertiesWindow);
 
-    for (auto device : m_controllers)
+    auto menu_devices = m_controllers;
+    if (GvTest::Active())
+      menu_devices.push_back(nullptr);   // test hook: see RefreshControls
+    for (auto device : menu_devices)
     {
-      if (device && device->IsValid() && !m_state.controlsDisabled)
+      if (((device && device->IsValid()) || (!device && GvTest::Active())) && !m_state.controlsDisabled)
       {
         if (TryInput("Menu", device))
         {
@@ -2365,6 +2380,10 @@ void ImGuiFrontend::AddGameFolder(std::string path)
 
 bool ImGuiFrontend::TryInput(std::string expression, std::shared_ptr<ciface::Core::Device> device)
 {
+  if (GvTest::Pressed(expression))  // Game Vault test hook (Common/GvTestKeys.h)
+    return true;
+  if (!device)
+    return false;
   auto* input = device->FindInput(expression);
   if (input == nullptr)
     return false;

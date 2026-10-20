@@ -3,6 +3,8 @@
 
 #include "VideoCommon/OnScreenUI.h"
 
+#include "Common/GvTestKeys.h"
+
 #include "Common/EnumMap.h"
 #include "Common/Profiler.h"
 #include "Common/Timer.h"
@@ -223,6 +225,8 @@ void OnScreenUI::BeginImGuiFrameUnlocked(u32 width, u32 height)
   auto device = g_controller_interface.FindDevice(dq);
 
   const auto WGINPUT = [=](std::string label) -> double {
+    if (GvTest::Pressed(label))  // Game Vault test hook (Common/GvTestKeys.h)
+      return 1.0;
     return device->FindInput(label)->GetState() == 1.0 ? 1.0 : 0;
   };
 
@@ -262,6 +266,22 @@ void OnScreenUI::BeginImGuiFrameUnlocked(u32 width, u32 height)
     float dpadRight = WGINPUT("Left X+") + WGINPUT("Pad E");
 
     io.AddKeyAnalogEvent(ImGuiKey_GamepadDpadRight, dpadRight > 0.0f, dpadRight);
+  }
+  else if (GvTest::Active())
+  {
+    // Game Vault test hook (Common/GvTestKeys.h) with no controller connected
+    const auto key = [&](ImGuiKey k, std::initializer_list<const char*> names) {
+      bool on = false;
+      for (const char* n : names)
+        on |= GvTest::Pressed(n);
+      io.AddKeyAnalogEvent(k, on, on ? 1.0f : 0.0f);
+    };
+    key(ImGuiKey_GamepadFaceDown, {"Button A"});
+    key(ImGuiKey_GamepadFaceRight, {"Button B"});
+    key(ImGuiKey_GamepadDpadUp, {"Pad N", "Left Y+"});
+    key(ImGuiKey_GamepadDpadDown, {"Pad S", "Left Y-"});
+    key(ImGuiKey_GamepadDpadLeft, {"Pad W", "Left X-"});
+    key(ImGuiKey_GamepadDpadRight, {"Pad E", "Left X+"});
   }
 #endif
 

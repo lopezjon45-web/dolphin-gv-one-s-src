@@ -2,6 +2,7 @@
 #include "Host.h"
 
 #include "UWPUtils.h"
+#include "Common/GvTestKeys.h"
 
 #include <windows.h>
 #include <iostream>
@@ -421,6 +422,8 @@ struct App : implements<App, IFrameworkViewSource, IFrameworkView>
 
   void Run()
   {
+    GvTest::Watch(UWP::GetLocalFolder() + "\\gvtest_keys.txt",   // test hook: Common/GvTestKeys.h
+                  [](const std::string& line) { GvLog(line); });
     // Game Vault: wait for the activation before choosing between the menu and a game. A link's activation often
     // arrives after the first pump; the menu was then already running, and booting the game from OnActivate shut
     // down the video backend the menu still drew with (null g_vertex_manager in VertexManagerBase::Flush).
