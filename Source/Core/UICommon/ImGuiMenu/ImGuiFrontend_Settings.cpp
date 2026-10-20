@@ -1130,11 +1130,19 @@ void CreateGCPort(int index, std::vector<std::string> devices)
       ImGui::EndCombo();
     }
 
-    if (ImGui::BeginCombo("Profile", m_selected_gc_profile[index].c_str()))
+    // Game Vault: the box shows what the port is set to now (None when switched off, else the profile picked,
+    // Default when none was picked this session)
+    std::string gc_shown = m_selected_gc_profile[index];
+    if (Config::Get(Config::GetInfoForSIDevice(index)) == SerialInterface::SIDevices::SIDEVICE_NONE)
+      gc_shown = "None";
+    else if (gc_shown.empty() || gc_shown == "None")
+      gc_shown = "Default";
+
+    if (ImGui::BeginCombo("Profile", gc_shown.c_str()))
     {
       for (auto profile : m_gc_profiles)
       {
-        if (ImGui::Selectable(profile.c_str(), m_selected_gc_profile[index] == profile))
+        if (ImGui::Selectable(profile.c_str(), gc_shown == profile))
         {
           m_selected_gc_profile[index] = profile;
 
@@ -1203,11 +1211,19 @@ void CreateWiiPort(int index, std::vector<std::string> devices)
       ImGui::EndCombo();
     }
 
-    if (ImGui::BeginCombo("Profile", m_selected_wiimote_profile[index].c_str()))
+    // Game Vault: Default / None like the GameCube ports, and the box shows what the port is set to now
+    // (None: no Wii Remote, for games played with a GameCube controller such as Mario Kart Wii)
+    std::string wii_shown = m_selected_wiimote_profile[index];
+    if (Config::Get(Config::GetInfoForWiimoteSource(index)) == WiimoteSource::None)
+      wii_shown = "None";
+    else if (wii_shown.empty() || wii_shown == "None" || wii_shown == "Wiimote + Nunchuk")
+      wii_shown = "Default";
+
+    if (ImGui::BeginCombo("Profile", wii_shown.c_str()))
     {
       for (auto profile : m_wiimote_profiles)
       {
-        if (ImGui::Selectable(profile.c_str(), m_selected_wiimote_profile[index] == profile))
+        if (ImGui::Selectable(profile.c_str(), wii_shown == profile))
         {
           m_selected_wiimote_profile[index] = profile;
 
@@ -1219,7 +1235,8 @@ void CreateWiiPort(int index, std::vector<std::string> devices)
             controller->SetDefaultDevice(default_device);
             Config::SetBaseOrCurrent(Config::GetInfoForWiimoteSource(index), WiimoteSource::None);
           }
-          else if (m_selected_wiimote_profile[index] == "Wiimote + Nunchuk")
+          else if (m_selected_wiimote_profile[index] == "Default" ||
+                   m_selected_wiimote_profile[index] == "Wiimote + Nunchuk")
           {
             controller->LoadDefaults(g_controller_interface);
 

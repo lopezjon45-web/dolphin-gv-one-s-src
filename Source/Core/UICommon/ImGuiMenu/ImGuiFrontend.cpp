@@ -970,8 +970,8 @@ ImGuiFrontend::ImGuiFrontend()
       m_wiimote_profiles.emplace_back(basename);
   }
 
-  m_wiimote_profiles.emplace_back("None");
-  m_wiimote_profiles.emplace_back("Wiimote + Nunchuk");
+  // Game Vault: Default / None first, as for the GameCube ports (Default = the standard Wii Remote + Nunchuk)
+  m_wiimote_profiles.insert(m_wiimote_profiles.begin(), {"Default", "None"});
   m_wiimote_profiles.emplace_back("Classic Controller");
   m_wiimote_profiles.emplace_back("Sideways Wiimote");
 
