@@ -198,12 +198,16 @@ void CreateInterfaceTab(UIState* state)
 
   ImGui::Spacing();
 
-  if (ImGui::BeginCombo("Theme", m_selected_theme->GetName().c_str()))
+  // Game Vault: a game started from Game Vault skips the menu, which is where the themes are loaded, so there is
+  // no selected theme yet; reading its name closed Dolphin when a player opened this tab (1.1.9.112 reports)
+  const std::string shown_theme = m_selected_theme ? m_selected_theme->GetName() :
+                                                     Config::Get(Config::FRONTEND_SELECTED_THEME);
+  if (ImGui::BeginCombo("Theme", shown_theme.c_str()))
   {
     for (auto& theme : m_themes)
     {
       if (ImGui::Selectable(theme.first.c_str(),
-                            m_selected_theme->GetName() == theme.second.GetName()))
+                            m_selected_theme && m_selected_theme->GetName() == theme.second.GetName()))
       {
         m_selected_theme = &theme.second;
         Config::SetBaseOrCurrent(Config::FRONTEND_SELECTED_THEME, theme.first);
