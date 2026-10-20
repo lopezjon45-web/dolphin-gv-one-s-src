@@ -180,6 +180,39 @@ static std::wstring GvSharedFolder()
   }
 }
 
+static void GvLogCalls(CONTEXT ctx)
+{
+  char text[512];
+// the calls that led there, so the code behind a crash can be found (one offset alone often lands in a
+// shared helper such as a string copy)
+  for (int i = 0; i < 16 && ctx.Rip; i++)
+  {
+    DWORD64 image = 0;
+    PRUNTIME_FUNCTION fn = RtlLookupFunctionEntry(ctx.Rip, &image, nullptr);
+    char where[MAX_PATH] = "?";
+    HMODULE mod = nullptr;
+    if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           reinterpret_cast<LPCSTR>(ctx.Rip), &mod))
+    {
+      GetModuleFileNameA(mod, where, MAX_PATH);
+    }
+    const char* short_name = std::strrchr(where, '\\');
+    std::snprintf(text, sizeof(text), "  call %d: %s+0x%llX\n", i, short_name ? short_name + 1 : where,
+                  static_cast<unsigned long long>(ctx.Rip - reinterpret_cast<DWORD64>(mod)));
+    GvLogRaw(text);
+    if (!fn)
+    {
+      // a leaf function: its return address is on top of the stack
+      ctx.Rip = *reinterpret_cast<DWORD64*>(ctx.Rsp);
+      ctx.Rsp += 8;
+      continue;
+    }
+    void* handler_data = nullptr;
+    DWORD64 frame = 0;
+    RtlVirtualUnwind(UNW_FLAG_NHANDLER, image, ctx.Rip, fn, &ctx, &handler_data, &frame, nullptr);
+  }
+}
+
 // a crash: what and where, as an offset into its module, so it can be looked up in the build's symbols
 static LONG WINAPI GvCrashFilter(EXCEPTION_POINTERS* info)
 {
@@ -201,6 +234,15 @@ static LONG WINAPI GvCrashFilter(EXCEPTION_POINTERS* info)
                 rec->NumberParameters > 0 ? static_cast<unsigned long long>(rec->ExceptionInformation[0]) : 0ull,
                 rec->NumberParameters > 1 ? static_cast<unsigned long long>(rec->ExceptionInformation[1]) : 0ull);
   GvLogRaw(text);
+
+  __try
+  {
+    GvLogCalls(*info->ContextRecord);
+  }
+  __except (EXCEPTION_EXECUTE_HANDLER)
+  {
+    GvLogRaw("  (call list cut short)\n");
+  }
   return EXCEPTION_CONTINUE_SEARCH;
 }
 
