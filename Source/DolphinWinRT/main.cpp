@@ -75,6 +75,9 @@ std::shared_ptr<NetPlay::NetPlayClient> g_netplay_client = nullptr;
 std::shared_ptr<NetPlay::NetPlayServer> g_netplay_server = nullptr;
 std::shared_ptr<ImGuiFrontend::ImGuiNetPlay> g_netplay_dialog = nullptr;
 
+extern "C" void uwp_redirect_file_apis_startup(void);   // UWPFileRedirect.cpp
+extern "C" unsigned uwp_redirect_count;
+
 namespace UWP
 {
 Common::Flag m_running{false};
@@ -744,8 +747,9 @@ struct App : implements<App, IFrameworkViewSource, IFrameworkView>
 
     Core::DeclareAsHostThread();
 
-    GvLog(fmt::format("link: game \"{}\", shared file {}, back to {}", filePath.str(),
-                      g_share_token.empty() ? "no" : "yes", m_launchOnExit.empty() ? "nothing" : "a link"));
+    GvLog(fmt::format("link: game \"{}\", shared file {}, back to {}, file calls through the broker {}",
+                      filePath.str(), g_share_token.empty() ? "no" : "yes",
+                      m_launchOnExit.empty() ? "nothing" : "a link", uwp_redirect_count));
     const std::string user = GvUserLocation();
     static Common::Flag safe_start_done{false};
     if (safe_start_done.TestAndSet())
@@ -828,6 +832,9 @@ struct App : implements<App, IFrameworkViewSource, IFrameworkView>
 
 int WINAPIV WinMain()
 {
+  // UWPFileRedirect.cpp: file calls go through the FromApp versions, so a drive the app container has no rights
+  // to itself (a player's exFAT USB drive: "the specified file does not exist") is read through the broker
+  uwp_redirect_file_apis_startup();
   winrt::init_apartment();
 
   CoreApplication::Run(make<UWP::App>());
