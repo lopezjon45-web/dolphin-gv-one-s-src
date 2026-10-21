@@ -227,7 +227,9 @@ void OnScreenUI::BeginImGuiFrameUnlocked(u32 width, u32 height)
   const auto WGINPUT = [=](std::string label) -> double {
     if (GvTest::Pressed(label))  // Game Vault test hook (Common/GvTestKeys.h)
       return 1.0;
-    return device->FindInput(label)->GetState() == 1.0 ? 1.0 : 0;
+    // the default device can lack a control (no SDL pad: another device kind is the default)
+    const auto* input = device->FindInput(label);
+    return input && input->GetState() == 1.0 ? 1.0 : 0;
   };
 
   if (device)
