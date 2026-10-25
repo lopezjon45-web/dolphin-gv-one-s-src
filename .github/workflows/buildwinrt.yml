@@ -84,8 +84,8 @@ jobs:
         Copy-Item $exe.FullName gate\
         if ($pdb) { Copy-Item $pdb.FullName gate\ }
         Copy-Item $sdl.FullName gate\
-        python tools\isa-gate.py --tool dumpbin --report-only gate\DolphinWinRT.exe | Tee-Object out\isa-gate-DolphinWinRT.txt
-        python tools\isa-gate.py --tool dumpbin --report-only gate\SDL3.dll | Tee-Object out\isa-gate-SDL3.txt
+        python Tools\isa-gate.py --tool dumpbin --report-only gate\DolphinWinRT.exe | Tee-Object out\isa-gate-DolphinWinRT.txt
+        python Tools\isa-gate.py --tool dumpbin --report-only gate\SDL3.dll | Tee-Object out\isa-gate-SDL3.txt
 
     - name: Upload the package
       if: matrix.configuration == 'Release'
