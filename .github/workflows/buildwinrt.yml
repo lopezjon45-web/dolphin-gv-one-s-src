@@ -1,12 +1,13 @@
-name: Dolphin WinRT Builds 
+# Dolphin for Game Vault, One S build: the upstream buildwinrt.yml (skitzellez/Dolphin-GameVault, branch gamevault)
+# plus: a single .appx instead of a bundle, signed with a throwaway CN=GamerDad certificate so the console takes it
+# as an update of the official package (the repo's DolphinWinRT_TemporaryKey.pfx is CN=SternXD and expired), the
+# ISA gate (report only) on the two binaries that run on the console, and a sha256 beside the package.
+name: Dolphin WinRT Builds
 on:
   push:
     branches:
-      - master
-      - actions
-  pull_request:
-    branches:
-      - master
+      - one-s
+  workflow_dispatch: {}
 
 jobs:
   build:
@@ -35,20 +36,60 @@ jobs:
         $version = $manifest.Package.Identity.Version
         echo $version
         echo version=$version >> $env:GITHUB_OUTPUT
-        
-    - name: Echo the GitHub Env for File Names
-      run: |
-        echo "${{ steps.extract_version.outputs.version }}"
 
     - name: Restore NuGet packages
       run: nuget restore Source/dolphin-emu.sln
 
     - name: Build the project
-      run: msbuild Source/dolphin-emu.sln /m /p:PlatformToolset=v143 /t:Restore,Rebuild /p:Configuration="${{ matrix.configuration }}" /p:Platform=x64 /t:restore,build /p:RestorePackagesConfig=true
-  
-    - name: Upload APPX file
+      run: msbuild Source/dolphin-emu.sln /m /p:PlatformToolset=v143 /t:Restore,Rebuild /p:Configuration="${{ matrix.configuration }}" /p:Platform=x64 /t:restore,build /p:RestorePackagesConfig=true /p:AppxBundle=Never /p:AppxPackageSigningEnabled=false /p:UapAppxPackageBuildMode=SideloadOnly
+
+    - name: Collect, sign and checksum the package
+      id: package
+      shell: pwsh
+      run: |
+        $version = "${{ steps.extract_version.outputs.version }}"
+        $built = Get-ChildItem AppPackages -Recurse -Include *.appx,*.msix | Where-Object { $_.Name -notmatch 'VCLibs' } | Select-Object -First 1
+        if (-not $built) { throw "no package under AppPackages" }
+        New-Item -ItemType Directory out | Out-Null
+        $out = "out\DolphinForGameVault_${version}_x64.appx"
+        Copy-Item $built.FullName $out
+        $vclibs = Get-ChildItem AppPackages -Recurse -Include Microsoft.VCLibs*.appx | Select-Object -First 1
+        if ($vclibs) { Copy-Item $vclibs.FullName out\ }
+        $sdk = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin" -Directory | Where-Object Name -match '^10\.' | Sort-Object Name -Descending | Select-Object -First 1
+        $signtool = Join-Path $sdk.FullName "x64\signtool.exe"
+        $cert = New-SelfSignedCertificate -Type Custom -Subject "CN=GamerDad" -KeyUsage DigitalSignature -FriendlyName "GamerDad test" -CertStoreLocation Cert:\CurrentUser\My -TextExtension @("2.5.29.37={text}1.3.6.1.5.5.7.3.3", "2.5.29.19={text}")
+        $pw = ConvertTo-SecureString -String "one-s" -Force -AsPlainText
+        Export-PfxCertificate -Cert $cert -FilePath cert.pfx -Password $pw | Out-Null
+        & $signtool sign /fd SHA256 /f cert.pfx /p one-s $out
+        if ($LASTEXITCODE -ne 0) { throw "signtool failed" }
+        Remove-Item cert.pfx
+        $hash = (Get-FileHash $out -Algorithm SHA256).Hash.ToLower()
+        "$hash  $(Split-Path $out -Leaf)" | Set-Content "$out.sha256" -NoNewline
+        Get-Content "$out.sha256"
+        echo "appx=$out" >> $env:GITHUB_OUTPUT
+
+    - name: Developer command prompt (dumpbin for the ISA gate)
+      uses: ilammy/msvc-dev-cmd@v1
+      with:
+        arch: x64
+
+    - name: ISA gate (report only; compare with the profile of a build that ran on the One S)
+      shell: pwsh
+      run: |
+        New-Item -ItemType Directory gate | Out-Null
+        $exe = Get-ChildItem -Recurse -Filter DolphinWinRT.exe | Where-Object { $_.FullName -match 'Release' } | Select-Object -First 1
+        $pdb = Get-ChildItem -Recurse -Filter DolphinWinRT.pdb | Where-Object { $_.FullName -match 'Release' } | Select-Object -First 1
+        $sdl = Get-ChildItem -Recurse -Filter SDL3.dll | Where-Object { $_.FullName -match 'Release' } | Select-Object -First 1
+        if (-not $exe -or -not $sdl) { throw "built binaries not found" }
+        Copy-Item $exe.FullName gate\
+        if ($pdb) { Copy-Item $pdb.FullName gate\ }
+        Copy-Item $sdl.FullName gate\
+        python tools\isa-gate.py --tool dumpbin --report-only gate\DolphinWinRT.exe | Tee-Object out\isa-gate-DolphinWinRT.txt
+        python tools\isa-gate.py --tool dumpbin --report-only gate\SDL3.dll | Tee-Object out\isa-gate-SDL3.txt
+
+    - name: Upload the package
       if: matrix.configuration == 'Release'
       uses: actions/upload-artifact@v4
       with:
         name: appx-${{ matrix.configuration }}
-        path: AppPackages
+        path: out

@@ -77,6 +77,7 @@ std::shared_ptr<ImGuiFrontend::ImGuiNetPlay> g_netplay_dialog = nullptr;
 
 extern "C" void uwp_redirect_file_apis_startup(void);   // UWPFileRedirect.cpp
 extern "C" unsigned uwp_redirect_count;
+extern "C" void uwp_process_token(char* out, size_t size);
 
 namespace UWP
 {
@@ -761,8 +762,21 @@ struct App : implements<App, IFrameworkViewSource, IFrameworkView>
     UICommon::Init();
     GvHookLog();
     GvLog("step: settings loaded");
+    // One S: whether the manifest's mediumIL took effect (a C# app with it still ran in an AppContainer at low)
+    char token[400];
+    uwp_process_token(token, sizeof(token));
+    NOTICE_LOG_FMT(CORE, "Game Vault trace: process {}", token);
+    GvLog(token);
     UICommon::InitControllers({});
     GvLog("step: controllers ready");
+
+    // One S: the window is activated before the boot, whose first file calls on a USB drive go through the broker
+    // at about 850 ms each (UWPFileRedirect.cpp); a start that has not activated in time is "took too long to
+    // start" (0x8027025a) for the console. Run() still waits for the flag before it chooses menu or game, and
+    // this handler runs on the same thread, so the boot below has set m_running by the time Run() looks.
+    CoreWindow window = CoreWindow::GetForCurrentThread();
+    window.Activate();
+    g_activated.Set();
 
     std::string gamePath = filePath.str();
     if (!g_share_token.empty() && !gamePath.empty())
@@ -781,10 +795,6 @@ struct App : implements<App, IFrameworkViewSource, IFrameworkView>
     {
       InitializeDolphinFromFile(gamePath);
     }
-
-    CoreWindow window = CoreWindow::GetForCurrentThread();
-    window.Activate();
-    g_activated.Set();
   }
 
   void EnteredBackground(const IInspectable&,
