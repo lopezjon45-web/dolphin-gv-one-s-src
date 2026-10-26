@@ -121,6 +121,12 @@ jobs:
         python Tools\isa-gate.py --tool dumpbin --report-only gate\DolphinWinRT.exe | Tee-Object out\isa-gate-DolphinWinRT.txt
         python Tools\isa-gate.py --tool dumpbin --report-only gate\SDL3.dll | Tee-Object out\isa-gate-SDL3.txt
 
+    - name: Retry policy and start-up walk test (stand-alone, MSVC)
+      shell: cmd
+      run: |
+        cl /nologo /std:c++20 /EHsc /W3 /I Source\Core /I Source\DolphinWinRT Source\DolphinWinRT\tests\retry_policy_test.cpp /Fe:retry_policy_test.exe
+        retry_policy_test.exe
+
     - name: Publish the package as a prerelease
       if: matrix.configuration == 'Release'
       shell: pwsh

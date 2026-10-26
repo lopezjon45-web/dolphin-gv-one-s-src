@@ -30,6 +30,7 @@
 #endif
 #include "Common/IOFile.h"
 #include "Common/Logging/Log.h"
+#include "Common/PathCompare.h"
 #include "Common/StringUtil.h"
 
 #ifdef _WIN32
@@ -265,6 +266,11 @@ bool CreateFullPath(std::string_view fullPath)
     return true;
   }
 
+  // Under the app's own folder the folders above it (U:\, U:\Users, ...) are never listable for the app; each
+  // look at one costs a brokered call of ~850 ms on the One S, a dozen of them per missing folder.
+  const std::string local_folder = UWP::GetLocalFolder();
+  const bool below_local = File::IsSameOrUnder<char>(fullPath, local_folder);
+
   size_t position = 0;
   while (true)
   {
@@ -290,6 +296,12 @@ bool CreateFullPath(std::string_view fullPath)
         position++;
         continue;
       }
+    }
+
+    if (below_local && File::IsStrictAncestor<char>(subPath, local_folder))
+    {
+      position++;
+      continue;
     }
 
     if (!IsDirectory(subPath))

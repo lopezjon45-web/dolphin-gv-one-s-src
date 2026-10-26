@@ -15,8 +15,9 @@
  * One S (2026-10-25, measured with a probe app on the console): a brokered call takes about 850 ms there, and
  * the first brokered call of the process can fail with ERROR_ACCESS_DENIED while every later one succeeds.
  * Dolphin's first call on the game is the existence check (File::Exists, std::filesystem, GetFileAttributesExW),
- * which answered "does not exist" and was never logged. So every call here is made again, up to kTries times,
- * when it is refused, and every call on a path outside the app's own folders (a game on a USB drive) is written
+ * which answered "does not exist" and was never logged. So the first refused call on a removable drive is made
+ * again once (UWPRetryPolicy.h: never on the drive of the app's own folders, where a refusal is real and costs
+ * 850 ms each time), and every call on a path outside the app's own folders (a game on a USB drive) is written
  * to LocalState\uwp_redirect.log with its result, error and time, failed or not.
  */
 #include <windows.h>
@@ -30,12 +31,15 @@
 #include <winrt/Windows.ApplicationModel.h>
 #include <winrt/Windows.Storage.h>
 
+#include "Common/PathCompare.h"
+#include "UWPRetryPolicy.h"
+
 extern "C" unsigned uwp_redirect_count = 0;   /* how many imports were pointed at FromApp, for the start log */
 static void log_redirect(const char *, unsigned n) { uwp_redirect_count = n; }
 
 namespace {
 
-constexpr int kTries = 3;                 /* attempts for a call refused with ERROR_ACCESS_DENIED */
+constexpr int kTries = 2;                 /* attempts for a drive's first call, when it is refused (UWPRetryPolicy.h) */
 constexpr DWORD kRetryWaitMs = 200;
 constexpr LONG kOutsideLogMax = 2000;     /* lines for calls outside the app's folders, per process */
 constexpr LONG kInsideFailureLogMax = 50; /* lines for failed calls inside them (missing optional files) */
@@ -99,11 +103,13 @@ static bool Outside(LPCWSTR name)
       return true;
    for (const std::wstring &p : own.paths)
    {
-      if (!p.empty() && _wcsnicmp(name, p.c_str(), p.size()) == 0)
+      if (File::IsSameOrUnder(std::wstring_view(name), std::wstring_view(p)))
          return false;
    }
    return true;
 }
+
+static UWPRetry::DrivePolicy g_drives;
 
 /* The log file: LocalState\uwp_redirect.log, one line per call, the process token first. */
 static void LogLine(const char *line, size_t len)
@@ -140,12 +146,14 @@ static void LogCall(LPCWSTR what, LPCWSTR name, bool ok, DWORD err, DWORD ms, in
       LogLine(line, (size_t)len);
 }
 
-/* Makes one FromApp call, again after a short wait when it is refused, and logs it when it failed or when the
- * path is outside the app's folders. `bad` is the call's failure value; GetLastError() is kept for the caller. */
+/* Makes one FromApp call, once more after a short wait when it is the first call on a removable drive and is
+ * refused (UWPRetryPolicy.h), and logs it when it failed or when the path is outside the app's folders.
+ * `bad` is the call's failure value; GetLastError() is kept for the caller. */
 template <typename R, typename F>
 static R Brokered(LPCWSTR what, LPCWSTR name, R bad, F call)
 {
    const bool outside = Outside(name);
+   const std::wstring_view path = name ? std::wstring_view(name) : std::wstring_view();
    const ULONGLONG started = GetTickCount64();
    R r = bad;
    DWORD err = 0;
@@ -155,7 +163,13 @@ static R Brokered(LPCWSTR what, LPCWSTR name, R bad, F call)
       tries++;
       r = call();
       err = r == bad ? GetLastError() : 0;
-      if (r != bad || err != ERROR_ACCESS_DENIED || tries >= kTries)
+      if (r != bad || err != ERROR_ACCESS_DENIED)
+      {
+         g_drives.Settle(path);
+         break;
+      }
+      const OwnFolders &own = Own();
+      if (tries >= kTries || !g_drives.AllowRetry(path, own.paths, own.resolved ? 4 : 0))
          break;
       Sleep(kRetryWaitMs);
    }
