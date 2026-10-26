@@ -48,12 +48,18 @@ jobs:
       shell: pwsh
       run: |
         $version = "${{ steps.extract_version.outputs.version }}"
-        $built = Get-ChildItem AppPackages -Recurse -Include *.appx,*.msix | Where-Object { $_.Name -notmatch 'VCLibs' } | Select-Object -First 1
-        if (-not $built) { throw "no package under AppPackages" }
+        # msbuild writes the package under $(SolutionDir)AppPackages: Source\AppPackages\DolphinWinRT\<name>_Test\
+        $packages = Get-ChildItem Source\AppPackages, . -Recurse -Include *.appx,*.msix -ErrorAction SilentlyContinue | Where-Object { $_.FullName -notmatch 'VCLibs|Externals' }
+        $built = $packages | Where-Object { $_.Name -match '^DolphinWinRT_' } | Select-Object -First 1
+        if (-not $built) {
+          Get-ChildItem -Recurse -Include *.appx,*.msix,*.appxbundle,*.msixbundle -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName }
+          throw "no DolphinWinRT package found (the files above are every package in the workspace)"
+        }
+        "package: $($built.FullName)"
         New-Item -ItemType Directory out | Out-Null
         $out = "out\DolphinForGameVault_${version}_x64.appx"
         Copy-Item $built.FullName $out
-        $vclibs = Get-ChildItem AppPackages -Recurse -Include Microsoft.VCLibs*.appx | Select-Object -First 1
+        $vclibs = Get-ChildItem $built.DirectoryName -Recurse -Include Microsoft.VCLibs.x64.*.appx | Select-Object -First 1
         if ($vclibs) { Copy-Item $vclibs.FullName out\ }
         $sdk = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin" -Directory | Where-Object Name -match '^10\.' | Sort-Object Name -Descending | Select-Object -First 1
         $signtool = Join-Path $sdk.FullName "x64\signtool.exe"
@@ -77,10 +83,15 @@ jobs:
       shell: pwsh
       run: |
         New-Item -ItemType Directory gate | Out-Null
-        $exe = Get-ChildItem -Recurse -Filter DolphinWinRT.exe | Where-Object { $_.FullName -match 'Release' } | Select-Object -First 1
-        $pdb = Get-ChildItem -Recurse -Filter DolphinWinRT.pdb | Where-Object { $_.FullName -match 'Release' } | Select-Object -First 1
-        $sdl = Get-ChildItem -Recurse -Filter SDL3.dll | Where-Object { $_.FullName -match 'Release' } | Select-Object -First 1
-        if (-not $exe -or -not $sdl) { throw "built binaries not found" }
+        # the build's own output (Build\x64\Release\DolphinWinRT\bin, Source\x64\Release\SDL-UWP), with the pdb beside
+        # the exe so the gate names the functions; a workspace search when the layout moves
+        $exe = Get-Item Build\x64\Release\DolphinWinRT\bin\DolphinWinRT.exe -ErrorAction SilentlyContinue
+        if (-not $exe) { $exe = Get-ChildItem Build, Source -Recurse -Filter DolphinWinRT.exe -ErrorAction SilentlyContinue | Where-Object { $_.FullName -match 'Release' } | Select-Object -First 1 }
+        $pdb = Get-ChildItem Build, Source -Recurse -Filter DolphinWinRT.pdb -ErrorAction SilentlyContinue | Where-Object { $_.FullName -match 'Release' } | Select-Object -First 1
+        $sdl = Get-Item Source\x64\Release\SDL-UWP\SDL3.dll -ErrorAction SilentlyContinue
+        if (-not $sdl) { $sdl = Get-ChildItem Source, Build -Recurse -Filter SDL3.dll -ErrorAction SilentlyContinue | Where-Object { $_.FullName -match 'Release' } | Select-Object -First 1 }
+        if (-not $exe -or -not $sdl) { throw "built binaries not found (exe: $exe, SDL3: $sdl)" }
+        "exe: $($exe.FullName)"; "pdb: $($pdb.FullName)"; "SDL3: $($sdl.FullName)"
         Copy-Item $exe.FullName gate\
         if ($pdb) { Copy-Item $pdb.FullName gate\ }
         Copy-Item $sdl.FullName gate\
