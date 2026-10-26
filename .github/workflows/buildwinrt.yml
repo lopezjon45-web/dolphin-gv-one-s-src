@@ -42,6 +42,19 @@ jobs:
     - name: Restore NuGet packages
       run: nuget restore Source/dolphin-emu.sln
 
+    # DolphinWinRT.vcxproj packages Sys\**\*.* (Content items), which MSBuild expands when it reads the project,
+    # before the project's own PreBuildEvent copies Data\Sys there. On a fresh checkout the glob is empty and the
+    # package ships without Sys (GameSettings, shaders, fonts, wiitdb: 2520 files). The author builds on a machine
+    # where an earlier build left the folder behind; CI makes the copy first.
+    - name: Copy Data\Sys into the project (what the PreBuildEvent does, before MSBuild reads the project)
+      shell: pwsh
+      run: |
+        robocopy Data\Sys Source\DolphinWinRT\Sys /xf *.vsh /E /R:0 /W:0 /NFL /NDL
+        if ($LASTEXITCODE -ge 8) { throw "robocopy failed with $LASTEXITCODE" }
+        $n = (Get-ChildItem Source\DolphinWinRT\Sys -Recurse -File).Count
+        "Sys files: $n"
+        if ($n -lt 2000) { throw "Sys has only $n files" }
+
     - name: Build the project
       run: msbuild Source/dolphin-emu.sln /m /p:PlatformToolset=v143 /t:Restore,Rebuild /p:Configuration="${{ matrix.configuration }}" /p:Platform=x64 /t:restore,build /p:RestorePackagesConfig=true /p:AppxBundle=Never /p:AppxPackageSigningEnabled=false /p:UapAppxPackageBuildMode=SideloadOnly
 
@@ -58,6 +71,13 @@ jobs:
           throw "no DolphinWinRT package found (the files above are every package in the workspace)"
         }
         "package: $($built.FullName)"
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        $zip = [System.IO.Compression.ZipFile]::OpenRead($built.FullName)
+        $entries = $zip.Entries.Count
+        $sys = ($zip.Entries | Where-Object { $_.FullName -like 'Sys/*' }).Count
+        $zip.Dispose()
+        "package entries: $entries, under Sys/: $sys (the official 1.1.9.120 has 2535 and 2520)"
+        if ($sys -lt 2000) { throw "the package is missing Sys/ ($sys entries)" }
         New-Item -ItemType Directory out | Out-Null
         $out = "out\DolphinForGameVault_${version}_x64.appx"
         Copy-Item $built.FullName $out
