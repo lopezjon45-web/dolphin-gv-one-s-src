@@ -12,6 +12,8 @@ on:
 jobs:
   build:
     runs-on: windows-2022
+    permissions:
+      contents: write   # the package goes out as a prerelease; the account's artifact storage is full
     strategy:
       matrix:
         configuration: ['Release']
@@ -98,9 +100,15 @@ jobs:
         python Tools\isa-gate.py --tool dumpbin --report-only gate\DolphinWinRT.exe | Tee-Object out\isa-gate-DolphinWinRT.txt
         python Tools\isa-gate.py --tool dumpbin --report-only gate\SDL3.dll | Tee-Object out\isa-gate-SDL3.txt
 
-    - name: Upload the package
+    - name: Publish the package as a prerelease
       if: matrix.configuration == 'Release'
-      uses: actions/upload-artifact@v4
-      with:
-        name: appx-${{ matrix.configuration }}
-        path: out
+      shell: pwsh
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        $version = "${{ steps.extract_version.outputs.version }}"
+        $tag = "dolphin-one-s-$version-run${{ github.run_id }}"
+        $files = Get-ChildItem out -File | ForEach-Object { $_.FullName }
+        gh release create $tag --prerelease --target ${{ github.sha }} --title "Dolphin for Game Vault $version (One S build, run ${{ github.run_id }})" --notes "Built from ${{ github.sha }} on windows-2022. Signed with a throwaway CN=GamerDad certificate for one console's Dev Mode install. Not a release." @files
+        if ($LASTEXITCODE -ne 0) { throw "gh release create failed" }
+        "release: $tag"
